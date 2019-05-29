@@ -6,7 +6,6 @@ try:
     from pymongo import MongoClient
 except:
     import pymongo
-import redis
 
 
 class ControlData(object):
@@ -14,15 +13,11 @@ class ControlData(object):
     pipeline管道操作
     数据库连接，查询，存储
     """
-    def __init__(self, mongo_host='localhost', redis_host='localhost', mongo_port=27017, redis_port=6379):
-        self.mongo_host = mongo_host
-        self.redis_host = redis_host
-        self.mongo_port = mongo_port
-        self.redis_port = redis_port
-        self.files = os.path.join(os.path.abspath('DATA'), '%s')
+    def __init__(self, mongo_host, mongo_port):
+        # self.files = os.path.join(os.path.abspath('DATA'), '%s')
         # self._data_makedir()
         # 此处mongodb是用的台式机ip 根据实际存储位置修改
-        self.client = MongoClient(host=self.mongo_host, port=self.mongo_port)
+        self.client = MongoClient(host=mongo_host, port=mongo_port)
 
 
     @staticmethod
@@ -66,7 +61,6 @@ class ControlData(object):
         :param colname: 集合名
         :return: 存储失败则返回 fail
         """
-
         db = self.client[dbname]
         col = db[colname]
         if isinstance(data, list):

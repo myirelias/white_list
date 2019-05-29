@@ -12,14 +12,16 @@ class ControlTask(object):
     """
     任务管理器，负责任务相关操作，如校验是否新增，读取已抓取任务文本
     """
-    def __init__(self, taskname, redis_host, redis_port):
+    def __init__(self, taskname, redis_host, redis_port, redis_psw):
         # self._mkdata()
         # 实例化两个bloomfilter
-        self.bloom_urls = BloomFilter(blockNum=6, key='bloomfilter_pub')  # url的过滤器，分6个块存,内存空间默认512M
-        # list的过滤器，默认1个块存,内存空间给64M
-        self.bloom_list = BloomFilter(key='{}_old_list'.format(taskname), bit_size=1 << 29)
+        self.bloom_urls = BloomFilter(host=redis_host, port=redis_port, psw=redis_psw,
+                                      blockNum=6, key='bloomfilter_pub')  # url的过滤器，分6个块存,内存空间默认512M
+        # list的过滤器，默认1个块存,内存空间给32M
+        self.bloom_list = BloomFilter(host=redis_host, port=redis_port, psw=redis_psw,
+                                      key='{}:redis_list'.format(taskname), bit_size=1 << 28)
         self.new_urls = set()
-        self.redis_cli = redis.Redis(host=redis_host, port=redis_port, db=0)
+        self.redis_cli = redis.Redis(host=redis_host, port=redis_port, db=0, password=redis_psw)
 
     @staticmethod
     def _task_read(path):
@@ -212,7 +214,8 @@ class SimpleHash(object):
 
 class BloomFilter(object):
 
-    def __init__(self, host='localhost', port=6379, db=0, blockNum=1, key='bloomfilter_pub', bit_size=1 << 32):
+    def __init__(self, host='localhost', port=6379, db=0, psw='', blockNum=1,
+                 key='bloomfilter_pub', bit_size=1 << 32):
 
         """
 
@@ -228,7 +231,7 @@ class BloomFilter(object):
 
         """
 
-        self.server = redis.Redis(host=host, port=port, db=db)
+        self.server = redis.Redis(host=host, port=port, db=db, password=psw)
 
         self.bit_size = bit_size  # Redis的String类型最大容量为512M
 

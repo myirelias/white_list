@@ -6,7 +6,6 @@ import json
 import os
 import re
 import time
-from imp import reload
 from multiprocessing import Process
 import pika
 from ControlNode.control_data import ControlData
@@ -21,16 +20,23 @@ class ControlManager(object):
     """
 
     def __init__(self, taskname, domain, start, url_end, regex_url, mq_maxsize, **kw):
-        self.redis_host = kw.get('REDIS_HOST', 'localhost')
-        self.redis_port = kw.get('REDIS_HOST', 6379)
+        self.redis_host = kw.get('REDIS_HOST')
+        self.redis_port = kw.get('REDIS_PORT')
+        self.redis_psw = kw.get('REDIS_PSW')
         self.taskname = taskname
         self.domain = domain
         self.start_url = start
         self.url_end = url_end
         self.regex_url = regex_url
         self.mq_maxsize = mq_maxsize
-        self.task_queue = '{}_{}'.format(taskname, 'task')
-        self.result_queue = '{}_{}'.format(taskname, 'result')
+        self.mongo_host = kw.get('MONGO_HOST')
+        self.mongo_port = kw.get('MONGO_PORT')
+        self.dbname_valid = kw.get('DBNAME_SUCCESS')
+        self.dbname_invalid = kw.get('DBNAME_FAIL')
+        # *:redis_[task/result]  bloomfilter_pub[num] | *:redis_list[num]
+        self.task_queue = '{}:redis_task'.format(taskname)
+        self.result_queue = '{}:redis_result'.format(taskname)
+        self.list_queue = '{}:redis_list0'.format(taskname)
         print('controlmanager init finsh')
 
     def manager_publish_task(self):
@@ -39,20 +45,23 @@ class ControlManager(object):
         :param
         :return:
         """
-        task_manager = ControlTask(taskname=self.taskname, redis_host=self.redis_host, redis_port=self.redis_port)
+        task_manager = ControlTask(taskname=self.taskname, redis_host=self.redis_host, redis_port=self.redis_port,
+                                   redis_psw=self.redis_psw)
         # 启动时候提供起始url：start_url, 如果task,result,continue队列都没有任务才发布
-        if not task_manager.task_query_redis('{}_{}'.format(self.taskname, 'task')):
-            task_manager.task_redis_del(key='{}_old_list0'.format(self.taskname))
+        if not task_manager.task_query_redis(self.task_queue):
+            task_manager.task_redis_del(key=self.list_queue)
             task_manager.task_check(self.start_url, domain=self.domain)
         # 启动后一直循环执行
         while True:
-            if not task_manager.task_query_redis('{}_{}'.format(self.taskname, 'task')) and not task_manager.new_urls:
-                task_manager.task_redis_del(key='{}_old_list0'.format(self.taskname))
+            time.sleep(1)
+            if not task_manager.task_query_redis(self.task_queue) and not task_manager.new_urls:
+                task_manager.task_redis_del(key=self.list_queue)
                 current_task = {'type': 'unstatic',
                                 'url': self.start_url}
                 task_manager.task_push_redis(self.task_queue, json.dumps(current_task))
                 time.sleep(10)
-            while task_manager.task_has_new():  # 只要存在新增任务则会往对应队列里面推送
+            while task_manager.task_has_new():
+                time.sleep(1)# 只要存在新增任务则会往对应队列里面推送
                 # 待处理的数据大于一百条的时候先去处理
                 if task_manager.task_query_redis(self.result_queue) >= 1000:
                     break
@@ -80,6 +89,7 @@ class ControlManager(object):
             n = 500
             # 下面是对结果(redis-result)进行处理
             while n:
+                time.sleep(1)
                 n -= 1
                 result = task_manager.task_pop_redis(self.result_queue)
                 if not result:
@@ -89,7 +99,8 @@ class ControlManager(object):
                 if not deal_result:
                     continue
                 if deal_result.get('push_data'):
-                    self._manager_save_data(deal_result['push_data'])
+                    self._manager_save_data(deal_result['push_data'], dbname=self.dbname_valid,
+                                            invalid_dbname=self.dbname_invalid)
                 elif deal_result.get('push_task'):
                     task_manager.task_check(deal_result['push_task'], domain=self.domain)
 
@@ -131,12 +142,21 @@ class ControlManager(object):
                     # 如果以..开头，则要到父级url
                     elif eachurl.startswith('..'):
                         if len(current_url.split('/')) > 4:
-                            newurl = '/'.join(current_url.split('/')[0:-2]) + re.sub(re.compile('(\.\.[/]*)+'), '/',
-                                                                                     eachurl)
+                            recount = len(re.findall(re.compile('\.\./'), eachurl)) - 1
+                            try:
+                                newurl = '/'.join(current_url.split('/')[0:-2 - recount]) + re.sub(
+                                    re.compile('(\.\.[/]*)+'), '/',
+                                    eachurl)
+                            except:
+                                newurl = '/'.join(current_url.split('/')[0:-2]) + re.sub(re.compile('(\.\.[/]*)+'), '/',
+                                                                                         eachurl)
                         elif len(current_url.split('/')) <= 4:
                             if root_url:
                                 new_eachurl = re.sub(re.compile('(\.\.[/]*)+'), '/', eachurl)
                                 newurl = root_url + new_eachurl
+                    # 如果以//开头 直接拼接http
+                    elif eachurl.startswith('//'):
+                        newurl = '{}:{}'.format(self.start_url.split(':')[0], eachurl)
                     # 如果以/开头，则要到根url
                     elif eachurl.startswith('/'):
                         if root_url:
@@ -175,34 +195,21 @@ class ControlManager(object):
         dbname: 数据库名称 colname:集合名称
         :return:
         """
-        data_manager = ControlData()
+        data_manager = ControlData(mongo_host=self.mongo_host, mongo_port=self.mongo_port)
         # 从数据队列中取之并进行存储
         try:
             save_data = json.loads(data)
             if save_data.get('title'):
-                data_manager.data_save_db(data=save_data, dbname=kw.get('dbname', 'db_public_opinion'),
-                                               colname=kw.get('colname', 'col_' + self.taskname))
+                data_manager.data_save_db(data=save_data, dbname=kw.get('dbname'),
+                                          colname=kw.get('colname', '{}_news'.format(self.taskname)))
             else:
-                save_invalid = {'invalid_url': save_data.get('url'),
-                                'get_time': save_data.get('get_time')}
-                data_manager.data_save_db(data=save_invalid, dbname=kw.get('invalid_dbname', 'db_public_invalid'),
-                                               colname=kw.get('colname', 'col_' + self.taskname))
+                save_invalid = {'news_url': save_data.get('news_url'),
+                                'crawl_date': save_data.get('crawl_date')}
+                data_manager.data_save_db(data=save_invalid, dbname=kw.get('invalid_dbname'),
+                                          colname=kw.get('colname', '{}_news_failed'.format(self.taskname)))
         except Exception as e:
             print(e)
             return
-
-    @staticmethod
-    def _manager_reload_config():
-        """
-        动态加载动态文件,暂时停用
-        :return:
-        """
-        with open(os.path.join(os.path.abspath('..'), 'config.ini'), 'r', encoding='UTF-8') as f:
-            with open(os.path.join(os.path.abspath('..'), 'config.py'), 'w', encoding='UTF-8') as fn:
-                fn.write(f.read())
-
-        import config as setting
-        reload(setting)
 
 #
 # if __name__ == '__main__':
