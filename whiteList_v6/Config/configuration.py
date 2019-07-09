@@ -58,8 +58,11 @@ DBNAME_FAIL = 'public_news_failed'
 PROXY_INFO = {
     'PROXY_HOST': 'http-pro.abuyun.com',
     'PROXY_PORT': '9010',
-    'PROXY_USER': '*****',
-    'PROXY_PASS': '*****'
+    'PROXY_USER': 'H2RX754122ED3QQP',
+    'PROXY_PASS': '8A57FAD6273DCA10'
 }
 
+# max count
+MAX_COUNT_LIST = 50000
+MAX_COUNT_NEWS = 50000
 

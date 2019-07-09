@@ -1,6 +1,9 @@
 # !/usr/bin/env python
 # coding=UTF-8
 
+"""
+redis队列对内存占用过大，先增加队列数量限制
+"""
 import sys
 import logging
 import re
@@ -91,6 +94,11 @@ class WholeEngine:
         while 1:
             try:
                 time.sleep(SLEEP_TIME)
+                res_list_count = self.redis_tool.redis_query(self.list_queue)
+                res_news_count = self.redis_tool.redis_query(self.news_queue)
+                if res_list_count >= MAX_COUNT_LIST or res_news_count >= MAX_COUNT_NEWS:
+                    time.sleep(60)  # 当任务队列大于一定数量时，暂停新增，循环等待
+                    continue
                 url = self.redis_tool.redis_brpop(self.list_queue, timeout=0)  # 阻塞等待redis列表中的任务
                 current_url = str(url, encoding='utf-8')
                 print(f'[{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]list爬虫{threading.current_thread().name} 接收到任务 {current_url}')
